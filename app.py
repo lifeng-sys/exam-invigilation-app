@@ -54,7 +54,9 @@ classes_df = st.session_state.classes_df
 schedule_df = st.session_state.schedule_df
 
 st.sidebar.header("🧩 添加监考安排")
-day_label = st.sidebar.selectbox("考试日", ["Day1", "Day2", "Day3"])
+from datetime import date, timedelta
+exam_days = [(date.today() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+day_label = st.sidebar.selectbox("考试日期", exam_days)
 time_start = st.sidebar.selectbox("开始时间", generate_5min_intervals())
 time_end = st.sidebar.selectbox("结束时间", generate_5min_intervals())
 exam_time = f"{day_label} {time_start}-{time_end}"

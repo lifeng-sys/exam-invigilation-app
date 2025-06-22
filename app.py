@@ -10,14 +10,12 @@ st.title("📘 期末考试监考安排系统（全功能版）")
 
 # 上传或默认加载数据
 def load_data():
-    if "teachers_df" not in st.session_state:
-        st.session_state.teachers_df = pd.read_excel("teachers_template.xlsx", sheet_name="教师名单")
-    if "rooms_df" not in st.session_state:
-        st.session_state.rooms_df = pd.read_excel("rooms_template.xlsx", sheet_name="教室列表")
-    if "subjects_df" not in st.session_state:
-        st.session_state.subjects_df = pd.read_excel("exam_subject_class_template.xlsx", sheet_name="科目")
-    if "classes_df" not in st.session_state:
-        st.session_state.classes_df = pd.read_excel("exam_subject_class_template.xlsx", sheet_name="班级")
+df = pd.read_excel("exam_data_template.xlsx", sheet_name=None)
+teachers_df = df["教师名单"]
+rooms_df = df["教室列表"]
+subjects_df = df["科目"]
+classes_df = df["班级"]
+
 
 def generate_5min_intervals(start="08:00", end="18:00"):
     tlist = []

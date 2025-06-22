@@ -1,5 +1,0 @@
-streamlit>=1.18.0
-pandas
-openpyxl
-xlsxwriter
-plotly

@@ -274,25 +274,7 @@ if st.button("一键自动排考"):
             dfv.to_excel(output4, index=False)
             output4.seek(0)
             st.download_button("导出班级排表", output4, file_name="exam_by_class.xlsx")
-        # 甘特图可视化
-        st.subheader("教室使用甘特图可视化")
-        try:
-            gantt_data = []
-            for _, row in sched.iterrows():
-                if pd.isna(row["分配教室"]) or pd.isna(row["日期"]) or pd.isna(row["时间段"]): continue
-                gantt_data.append(dict(
-                    Task=row["分配教室"],
-                    Start=f"{row['日期']} {row['时间段'].split('-')[0]}",
-                    Finish=f"{row['日期']} {row['时间段'].split('-')[1]}",
-                    Resource=f"{row['科目']}({row['班级']})"
-                ))
-            if gantt_data:
-                fig = ff.create_gantt(gantt_data, group_tasks=True, index_col='Resource', show_colorbar=True, title="教室安排甘特图")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("暂无数据可展示甘特图")
-        except Exception as e:
-            st.warning(f"甘特图生成失败: {e}")
+      
         # 监考老师工作量
         st.subheader("监考老师工作量统计表")
         teacher_stat = pd.DataFrame({

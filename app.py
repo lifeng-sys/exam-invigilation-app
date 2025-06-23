@@ -329,3 +329,34 @@ if st.button("一键自动排考"):
         st.download_button("导出监考老师工作量表", teacher_stat.to_excel(index=False), file_name="teacher_stat.xlsx")
     else:
         st.warning("请先上传全部4类基础表格！")
+import io
+
+# 例：完整排考Excel导出
+output = io.BytesIO()
+sched.to_excel(output, index=False)
+output.seek(0)
+st.download_button("导出完整排考Excel", output, file_name="exam_schedule_all.xlsx")
+
+# 教师排表导出
+output2 = io.BytesIO()
+dfv.to_excel(output2, index=False)
+output2.seek(0)
+st.download_button("导出教师排表", output2, file_name="exam_by_teacher.xlsx")
+
+# 教室排表导出
+output3 = io.BytesIO()
+dfv.to_excel(output3, index=False)
+output3.seek(0)
+st.download_button("导出教室排表", output3, file_name="exam_by_room.xlsx")
+
+# 班级排表导出
+output4 = io.BytesIO()
+dfv.to_excel(output4, index=False)
+output4.seek(0)
+st.download_button("导出班级排表", output4, file_name="exam_by_class.xlsx")
+
+# 监考老师工作量导出
+output5 = io.BytesIO()
+teacher_stat.to_excel(output5, index=False)
+output5.seek(0)
+st.download_button("导出监考老师工作量表", output5, file_name="teacher_stat.xlsx")

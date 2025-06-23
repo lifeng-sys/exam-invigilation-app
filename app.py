@@ -41,6 +41,13 @@ show_table("教室表", rooms_df)
 show_table("教师表", teachers_df)
 show_table("考试时间段表", timeslots_df)
 
+# ---- 这里增加 teachers 列表全局变量 ----
+if teachers_df is not None:
+    teachers = teachers_df["姓名"].tolist()
+else:
+    teachers = []
+# ----
+
 # ========== 2. 主排考逻辑：考试项目分组，全部同时间 ==========
 st.header("步骤2：一键自动排考（同一考试项目同一时间段）")
 

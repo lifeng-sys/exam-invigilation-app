@@ -4,7 +4,7 @@ import io
 from collections import defaultdict
 
 st.set_page_config(page_title="智能排考系统", layout="wide")
-st.title("期末考试智能排考系统（指定场次+自动排考+傻瓜式操作）")
+st.title("期末考试智能排考系统（指定场次+自动排考+监考老师不够自动备注+傻瓜式操作）")
 
 # ========== 1. 数据上传与参数设置区 ==========
 st.header("步骤1：上传表格（支持指定考试场次）")
@@ -16,7 +16,10 @@ teachers_file = st.file_uploader("教师表（.xlsx）", type=["xlsx"])
 timeslots_file = st.file_uploader("考试时间段表（.xlsx）", type=["xlsx"])
 
 max_per_day = st.number_input("每位老师每天最多监考场数", min_value=1, max_value=10, value=3)
-st.info("可上传指定考试场次表（如省级统考），系统优先为这些场次分配监考老师，再自动排考。所有场次合并为一张总表，可筛选、导出、统计。")
+st.info(
+    "可上传指定考试场次表（如省级统考），系统优先为这些场次分配监考老师。监考老师不够时也能先排教室和时间段，"
+    "监考老师字段留空，备注自动提示“监考老师待补”。所有场次合并为一张总表，可筛选、导出、统计。"
+)
 
 def load_xlsx(f):
     if f is not None:
@@ -65,16 +68,19 @@ def assign_specified_monitor(specified_df, teachers, teacher_stats, teacher_tota
                 assigned_teachers.append(t)
                 if len(assigned_teachers) == tcnt:
                     break
-        # 写入（有缺口补空）
+        # 补足空缺
         while len(assigned_teachers) < tcnt:
             assigned_teachers.append("")
-        # 更新老师工作量与冲突记录
+        # 记录冲突
         for t in assigned_teachers:
             if t:
                 used_teacher.add((row["日期"], row["时间段"], t))
                 teacher_stats[t][row["日期"]] += 1
                 teacher_total[t] += 1
-        # 写入排表
+        # 自动备注
+        more_remark = str(row.get("备注", "")) + " 指定场次"
+        if any(t == "" for t in assigned_teachers):
+            more_remark += "（监考老师待补）"
         rows.append({
             "班级": row["班级"],
             "科目": row["科目"],
@@ -84,7 +90,7 @@ def assign_specified_monitor(specified_df, teachers, teacher_stats, teacher_tota
             "分配教室": row["教室"],
             "监考老师1": assigned_teachers[0],
             "监考老师2": assigned_teachers[1] if tcnt==2 else "",
-            "备注": str(row.get("备注", "")) + " 指定场次"
+            "备注": more_remark
         })
     return rows, teacher_stats, teacher_total, used_teacher
 
@@ -95,7 +101,6 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
     used_slots = set()
     assigned_time_by_proj = dict()  # (科目,考试类型) -> (日期,时间段)
 
-    # 按考试项目分组，同组所有考试排同一时间
     if exam_df is None:
         return []
     proj_groups = exam_df.groupby(["科目", "考试类型"])
@@ -139,17 +144,23 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                         if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                             assigned_teachers.append(t)
                             if len(assigned_teachers)==tcnt: break
-                    if len(assigned_teachers)<tcnt: continue
+                    # 老师不够也允许排
+                    while len(assigned_teachers) < tcnt:
+                        assigned_teachers.append("")
                     # 分配
                     used.add(room_key)
                     for t in assigned_teachers:
-                        used_teacher.add((slot[0], slot[1], t))
-                        teacher_stats[t][slot[0]] += 1
-                        teacher_total[t] += 1
+                        if t:
+                            used_teacher.add((slot[0], slot[1], t))
+                            teacher_stats[t][slot[0]] += 1
+                            teacher_total[t] += 1
+                    remark = "大教室，整班不分单双号（统一考试项目同时间段）"
+                    if any(t == "" for t in assigned_teachers):
+                        remark += "（监考老师待补）"
                     schedule_rows.append({
                         **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": room_row["教室编号"],
                         "监考老师1": assigned_teachers[0], "监考老师2": assigned_teachers[1],
-                        "备注": "大教室，整班不分单双号（统一考试项目同时间段）"
+                        "备注": remark
                     })
                     used_class.add((slot[0], slot[1], exam_row["班级"]))
                     assigned = True
@@ -195,24 +206,23 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                         tgroup.append(t)
                     if len(tgroup)==2: break
-                if len(tgroup)<2:
-                    schedule_rows.append({
-                        **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": "",
-                        "监考老师1": "", "监考老师2": "",
-                        "备注": "无足够老师分单双号（统一考试项目同时间段）"
-                    })
-                    continue
+                while len(tgroup) < 2:
+                    tgroup.append("")
                 # 写入单双号
                 names = [f"{exam_row['班级']}(单)", f"{exam_row['班级']}(双)"]
                 for j in range(2):
                     used.add(room_keys[j])
-                    used_teacher.add((slot[0], slot[1], tgroup[j]))
-                    teacher_stats[tgroup[j]][slot[0]] += 1
-                    teacher_total[tgroup[j]] += 1
+                    if tgroup[j]:
+                        used_teacher.add((slot[0], slot[1], tgroup[j]))
+                        teacher_stats[tgroup[j]][slot[0]] += 1
+                        teacher_total[tgroup[j]] += 1
+                    remark = "分单双号考场（统一考试项目同时间段）"
+                    if tgroup[j] == "":
+                        remark += "（监考老师待补）"
                     schedule_rows.append({
                         **exam_row, "班级": names[j], "日期": slot[0], "时间段": slot[1], "分配教室": room_rows[j]["教室编号"],
                         "监考老师1": tgroup[j], "监考老师2": "",
-                        "备注": "分单双号考场（统一考试项目同时间段）"
+                        "备注": remark
                     })
                     used_class.add((slot[0], slot[1], names[j]))
             else:
@@ -236,18 +246,23 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                         if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                             assigned_teachers.append(t)
                             if len(assigned_teachers)==tcnt: break
-                    if len(assigned_teachers)<tcnt: continue
+                    while len(assigned_teachers) < tcnt:
+                        assigned_teachers.append("")
                     # 分配
                     used.add(room_key)
                     for t in assigned_teachers:
-                        used_teacher.add((slot[0], slot[1], t))
-                        teacher_stats[t][slot[0]] += 1
-                        teacher_total[t] += 1
+                        if t:
+                            used_teacher.add((slot[0], slot[1], t))
+                            teacher_stats[t][slot[0]] += 1
+                            teacher_total[t] += 1
+                    remark = "统一考试项目同时间段"
+                    if any(t == "" for t in assigned_teachers):
+                        remark += "（监考老师待补）"
                     schedule_rows.append({
                         **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": room_row["教室编号"],
                         "监考老师1": assigned_teachers[0],
                         "监考老师2": assigned_teachers[1] if tcnt==2 else "",
-                        "备注": "统一考试项目同时间段"
+                        "备注": remark
                     })
                     used_class.add((slot[0], slot[1], exam_row["班级"]))
                     assigned = True
@@ -280,6 +295,7 @@ if st.button("一键自动排考"):
             if "单双号" in str(r["备注"]): return ['background-color: #ffd;']*len(r)
             if "大教室" in str(r["备注"]): return ['background-color: #e6f7ff']*len(r)
             if "指定场次" in str(r["备注"]): return ['background-color: #ffeaea']*len(r)
+            if "待补" in str(r["备注"]): return ['background-color: #fdd']*len(r)
             if "无可用" in str(r["备注"]): return ['background-color: #faa']*len(r)
             return ['']*len(r)
         st.subheader("全排考表（可编辑微调后导出）")

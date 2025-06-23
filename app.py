@@ -4,7 +4,7 @@ import io
 from collections import defaultdict
 
 st.set_page_config(page_title="智能排考系统", layout="wide")
-st.title("期末考试智能排考系统（指定场次+自动排考+监考老师不够自动备注+傻瓜式操作）")
+st.title("期末考试智能排考系统（教室轮转分配+指定场次+监考老师不足备注）")
 
 # ========== 1. 数据上传与参数设置区 ==========
 st.header("步骤1：上传表格（支持指定考试场次）")
@@ -17,8 +17,7 @@ timeslots_file = st.file_uploader("考试时间段表（.xlsx）", type=["xlsx"]
 
 max_per_day = st.number_input("每位老师每天最多监考场数", min_value=1, max_value=10, value=3)
 st.info(
-    "可上传指定考试场次表（如省级统考），系统优先为这些场次分配监考老师。监考老师不够时也能先排教室和时间段，"
-    "监考老师字段留空，备注自动提示“监考老师待补”。所有场次合并为一张总表，可筛选、导出、统计。"
+    "所有教室均匀轮转分配，指定场次优先排，监考老师不够时自动备注。每个考试项目所有班级同一时间考试，不跨时间段顺延。"
 )
 
 def load_xlsx(f):
@@ -49,7 +48,25 @@ else:
     teachers = []
 
 # ========== 2. 自动排考 & 指定场次分配 ==========
-st.header("步骤2：一键自动排考（含指定场次监考安排）")
+st.header("步骤2：一键自动排考（教室均匀轮转分配）")
+
+# 教室均匀轮转分配辅助
+room_use_count = defaultdict(int)
+def get_balanced_rooms(rooms_df, used, slot, etype, is_big=None):
+    # etype: "机考" or not
+    if etype == "机考":
+        filtered = rooms_df[(rooms_df["是否为机房"] == "是")]
+    else:
+        filtered = rooms_df[(rooms_df["是否为机房"] == "否")]
+    if is_big is not None:
+        filtered = filtered[filtered["是否大教室"] == ("是" if is_big else "否")]
+    room_list = []
+    for _, row in filtered.iterrows():
+        room_key = (slot[0], slot[1], row["教室编号"])
+        if room_key not in used:
+            room_list.append(row)
+    room_list = sorted(room_list, key=lambda r: room_use_count[r["教室编号"]])
+    return room_list
 
 def assign_specified_monitor(specified_df, teachers, teacher_stats, teacher_total, used_teacher, max_per_day):
     rows = []
@@ -77,7 +94,6 @@ def assign_specified_monitor(specified_df, teachers, teacher_stats, teacher_tota
                 used_teacher.add((row["日期"], row["时间段"], t))
                 teacher_stats[t][row["日期"]] += 1
                 teacher_total[t] += 1
-        # 自动备注
         more_remark = str(row.get("备注", "")) + " 指定场次"
         if any(t == "" for t in assigned_teachers):
             more_remark += "（监考老师待补）"
@@ -89,7 +105,7 @@ def assign_specified_monitor(specified_df, teachers, teacher_stats, teacher_tota
             "时间段": row["时间段"],
             "分配教室": row["教室"],
             "监考老师1": assigned_teachers[0],
-            "监考老师2": assigned_teachers[1] if tcnt==2 else "",
+            "监考老师2": assigned_teachers[1] if tcnt == 2 else "",
             "备注": more_remark
         })
     return rows, teacher_stats, teacher_total, used_teacher
@@ -100,7 +116,6 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
     used_class = set()     # (日期,时间段,班级)
     used_slots = set()
     assigned_time_by_proj = dict()  # (科目,考试类型) -> (日期,时间段)
-
     if exam_df is None:
         return []
     proj_groups = exam_df.groupby(["科目", "考试类型"])
@@ -121,19 +136,16 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                 })
             continue
         # 2. 同组考试全部安排在slot
-        for _, exam_row in group.iterrows():
-            # 单双号逻辑
+        class_rows = list(group.iterrows())
+        assigned_classes = 0
+        # ---单双号逻辑---
+        for idx, exam_row in class_rows:
             if str(exam_row.get("分单双号", "")).strip() == "是":
-                # 先尝试大教室整体排
+                # 优先均匀分配大教室
+                big_rooms = get_balanced_rooms(rooms_df, used, slot, etype, is_big=True)
                 assigned = False
-                r = rooms_df[rooms_df["是否大教室"]=="是"]
-                if etype == "机考":
-                    r = r[r["是否为机房"]=="是"]
-                else:
-                    r = r[r["是否为机房"]=="否"]
-                for _, room_row in r.iterrows():
+                for room_row in big_rooms:
                     room_key = (slot[0], slot[1], room_row["教室编号"])
-                    if room_key in used: continue
                     tcnt = 2
                     assigned_teachers = []
                     candidate_teachers = sorted(
@@ -143,12 +155,12 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     for t in candidate_teachers:
                         if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                             assigned_teachers.append(t)
-                            if len(assigned_teachers)==tcnt: break
-                    # 老师不够也允许排
+                            if len(assigned_teachers) == tcnt:
+                                break
                     while len(assigned_teachers) < tcnt:
                         assigned_teachers.append("")
-                    # 分配
                     used.add(room_key)
+                    room_use_count[room_row["教室编号"]] += 1
                     for t in assigned_teachers:
                         if t:
                             used_teacher.add((slot[0], slot[1], t))
@@ -164,39 +176,18 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     })
                     used_class.add((slot[0], slot[1], exam_row["班级"]))
                     assigned = True
+                    assigned_classes += 1
                     break
                 if assigned: continue
-                # 没大教室，拆单双号
-                r = rooms_df[rooms_df["是否大教室"]=="否"]
-                if etype == "机考":
-                    r = r[r["是否为机房"]=="是"]
-                else:
-                    r = r[r["是否为机房"]=="否"]
-                rooms_iter = list(r.iterrows())
-                if len(rooms_iter)<2:
+                # 拆单双号，均匀分配普通教室
+                norm_rooms = get_balanced_rooms(rooms_df, used, slot, etype, is_big=False)
+                if len(norm_rooms) < 2:
                     schedule_rows.append({
                         **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": "",
                         "监考老师1": "", "监考老师2": "",
                         "备注": "无足够教室分单双号（统一考试项目同时间段）"
                     })
                     continue
-                # 分配两个教室
-                room_rows = []
-                room_keys = []
-                for _, room_row in rooms_iter:
-                    room_key = (slot[0], slot[1], room_row["教室编号"])
-                    if room_key not in used:
-                        room_rows.append(room_row)
-                        room_keys.append(room_key)
-                    if len(room_rows)==2: break
-                if len(room_rows)<2:
-                    schedule_rows.append({
-                        **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": "",
-                        "监考老师1": "", "监考老师2": "",
-                        "备注": "无足够教室分单双号（统一考试项目同时间段）"
-                    })
-                    continue
-                # 分配老师
                 tgroup = []
                 candidate_teachers = sorted(
                     teachers,
@@ -205,13 +196,16 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                 for t in candidate_teachers:
                     if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                         tgroup.append(t)
-                    if len(tgroup)==2: break
+                    if len(tgroup) == 2:
+                        break
                 while len(tgroup) < 2:
                     tgroup.append("")
-                # 写入单双号
                 names = [f"{exam_row['班级']}(单)", f"{exam_row['班级']}(双)"]
                 for j in range(2):
-                    used.add(room_keys[j])
+                    room_row = norm_rooms[j]
+                    room_key = (slot[0], slot[1], room_row["教室编号"])
+                    used.add(room_key)
+                    room_use_count[room_row["教室编号"]] += 1
                     if tgroup[j]:
                         used_teacher.add((slot[0], slot[1], tgroup[j]))
                         teacher_stats[tgroup[j]][slot[0]] += 1
@@ -220,23 +214,19 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     if tgroup[j] == "":
                         remark += "（监考老师待补）"
                     schedule_rows.append({
-                        **exam_row, "班级": names[j], "日期": slot[0], "时间段": slot[1], "分配教室": room_rows[j]["教室编号"],
+                        **exam_row, "班级": names[j], "日期": slot[0], "时间段": slot[1], "分配教室": room_row["教室编号"],
                         "监考老师1": tgroup[j], "监考老师2": "",
                         "备注": remark
                     })
                     used_class.add((slot[0], slot[1], names[j]))
+                assigned_classes += 1
             else:
-                # 不分单双号，普通排考
+                # 普通班级，均匀分配所有合格教室
+                avail_rooms = get_balanced_rooms(rooms_df, used, slot, etype)
                 assigned = False
-                r = rooms_df
-                if etype == "机考":
-                    r = r[r["是否为机房"]=="是"]
-                else:
-                    r = r[r["是否为机房"]=="否"]
-                for _, room_row in r.iterrows():
+                for room_row in avail_rooms:
                     room_key = (slot[0], slot[1], room_row["教室编号"])
-                    if room_key in used: continue
-                    tcnt = 2 if room_row["是否大教室"]=="是" else 1
+                    tcnt = 2 if room_row["是否大教室"] == "是" else 1
                     candidate_teachers = sorted(
                         teachers,
                         key=lambda t: (teacher_stats[t][slot[0]], teacher_total[t])
@@ -245,11 +235,12 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     for t in candidate_teachers:
                         if teacher_stats[t][slot[0]] < max_per_day and (slot[0], slot[1], t) not in used_teacher:
                             assigned_teachers.append(t)
-                            if len(assigned_teachers)==tcnt: break
+                            if len(assigned_teachers) == tcnt:
+                                break
                     while len(assigned_teachers) < tcnt:
                         assigned_teachers.append("")
-                    # 分配
                     used.add(room_key)
+                    room_use_count[room_row["教室编号"]] += 1
                     for t in assigned_teachers:
                         if t:
                             used_teacher.add((slot[0], slot[1], t))
@@ -261,11 +252,12 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
                     schedule_rows.append({
                         **exam_row, "日期": slot[0], "时间段": slot[1], "分配教室": room_row["教室编号"],
                         "监考老师1": assigned_teachers[0],
-                        "监考老师2": assigned_teachers[1] if tcnt==2 else "",
+                        "监考老师2": assigned_teachers[1] if tcnt == 2 else "",
                         "备注": remark
                     })
                     used_class.add((slot[0], slot[1], exam_row["班级"]))
                     assigned = True
+                    assigned_classes += 1
                     break
                 if not assigned:
                     schedule_rows.append({
@@ -277,20 +269,19 @@ def auto_schedule(exam_df, rooms_df, teachers, teacher_stats, teacher_total, use
 
 if st.button("一键自动排考"):
     if teachers and (rooms_df is not None) and (timeslots_df is not None):
-        # 初始化老师统计
-        teacher_stats = defaultdict(lambda: defaultdict(int))  # teacher_stats[teacher][date]
+        teacher_stats = defaultdict(lambda: defaultdict(int))
         teacher_total = defaultdict(int)
         used_teacher = set()
+        room_use_count.clear()
         # 1. 指定场次优先分配
         specified_sched_rows, teacher_stats, teacher_total, used_teacher = assign_specified_monitor(
             specified_df, teachers, teacher_stats, teacher_total, used_teacher, max_per_day)
-        # 2. 自动排考
+        # 2. 自动排考（轮转教室分配）
         auto_sched_rows = auto_schedule(
             exam_df, rooms_df, teachers, teacher_stats, teacher_total, used_teacher, timeslots_df, max_per_day)
         # 3. 合并
         all_sched_df = pd.DataFrame(specified_sched_rows + auto_sched_rows)
         st.success("排考完成！下方可调整、筛选、导出、统计。")
-        # 高亮
         def highlight_row(r):
             if "单双号" in str(r["备注"]): return ['background-color: #ffd;']*len(r)
             if "大教室" in str(r["备注"]): return ['background-color: #e6f7ff']*len(r)
@@ -304,12 +295,12 @@ if st.button("一键自动排考"):
         all_sched_df.to_excel(output, index=False)
         output.seek(0)
         st.download_button("导出完整排考Excel", output, file_name="exam_schedule_all.xlsx")
-        # 筛选视图与导出
         st.subheader("筛选视图与导出")
         tab1, tab2, tab3 = st.tabs(["按教师", "按教室", "按班级"])
         with tab1:
-            tsel = st.selectbox("教师筛选", ["全部"]+teachers)
-            dfv = all_sched_df if tsel=="全部" else all_sched_df[(all_sched_df["监考老师1"]==tsel)|(all_sched_df["监考老师2"]==tsel)]
+            tsel = st.selectbox("教师筛选", ["全部"] + teachers)
+            dfv = all_sched_df if tsel == "全部" else all_sched_df[
+                (all_sched_df["监考老师1"] == tsel) | (all_sched_df["监考老师2"] == tsel)]
             st.dataframe(dfv)
             output2 = io.BytesIO()
             dfv.to_excel(output2, index=False)
@@ -317,8 +308,8 @@ if st.button("一键自动排考"):
             st.download_button("导出教师排表", output2, file_name="exam_by_teacher.xlsx")
         with tab2:
             room_list = list(all_sched_df["分配教室"].dropna().unique())
-            rsel = st.selectbox("教室筛选", ["全部"]+room_list)
-            dfv = all_sched_df if rsel=="全部" else all_sched_df[all_sched_df["分配教室"]==rsel]
+            rsel = st.selectbox("教室筛选", ["全部"] + room_list)
+            dfv = all_sched_df if rsel == "全部" else all_sched_df[all_sched_df["分配教室"] == rsel]
             st.dataframe(dfv)
             output3 = io.BytesIO()
             dfv.to_excel(output3, index=False)
@@ -326,14 +317,13 @@ if st.button("一键自动排考"):
             st.download_button("导出教室排表", output3, file_name="exam_by_room.xlsx")
         with tab3:
             class_list = list(all_sched_df["班级"].dropna().unique())
-            csel = st.selectbox("班级筛选", ["全部"]+class_list)
-            dfv = all_sched_df if csel=="全部" else all_sched_df[all_sched_df["班级"]==csel]
+            csel = st.selectbox("班级筛选", ["全部"] + class_list)
+            dfv = all_sched_df if csel == "全部" else all_sched_df[all_sched_df["班级"] == csel]
             st.dataframe(dfv)
             output4 = io.BytesIO()
             dfv.to_excel(output4, index=False)
             output4.seek(0)
             st.download_button("导出班级排表", output4, file_name="exam_by_class.xlsx")
-        # 监考老师工作量
         st.subheader("监考老师工作量统计表")
         teacher_stat = pd.DataFrame({
             "教师": list(teacher_total.keys()),
